@@ -1,0 +1,79 @@
+Autonomous AI SOC Analyst Pipeline
+
+An automated, local AI-driven Security Operations Center (SOC) pipeline that emulates the triage, analysis, and reporting duties of a Tier 1 SOC Analyst.
+
+By utilizing local Large Language Models (via Ollama) and custom Python orchestration, this tool performs continuous behavioral analysis on network/auth logs without sending sensitive telemetry to cloud providers.
+
+🚀 Features
+
+Autonomous Behavioral Analysis: Replaces rigid Regex rules with AI context-awareness. The AI reads event sequences to detect novel and obfuscated attacks.
+
+Continuous Monitoring: Runs in a live loop, analyzing new log entries as they are written to the file.
+
+Threat Intelligence Enrichment: Automatically queries a local SQLite database of known malicious IPs (populated by the CINS Army threat feed).
+
+Automated SOC Reporting: Generates industry-standard Incident Response tickets, including Executive Summaries, MITRE ATT&CK mapping, IoC extraction, and containment recommendations.
+
+100% Local & Private: All data processing and AI inference happen on-premise.
+
+📁 Project Structure
+
+smart_pipeline.py: The core engine. Monitors logs continuously, groups events by IP, queries the database, and feeds data to the AI for analysis.
+
+setup_db.py: Initializes the local SQLite threat intelligence database (threat_intel.db).
+
+update_feed.py: Reaches out to open-source threat feeds (CINS) to download active malicious IPs and updates the local database. Designed to be run via a background scheduler for daily updates.
+
+🛠️ Prerequisites
+
+Python 3.x
+
+Ollama: Installed and running locally.
+
+LLM Model: The script defaults to qwen2.5 via Ollama.
+
+⚙️ Setup & Installation
+
+Clone the repository:
+
+git clone https://github.com/yourusername/autonomous-soc-pipeline.git
+cd autonomous-soc-pipeline
+
+
+Initialize the Threat Database:
+
+python3 setup_db.py
+
+
+Automate Daily Threat Intel Updates:
+Threat indicators decay quickly. It is highly recommended to automate the update_feed.py script to run daily at midnight.
+
+For Linux/macOS Users (Using cron):
+
+Open your terminal and type crontab -e.
+
+Scroll to the bottom of the file and add this line (replace /path/to/your/folder with your actual absolute path):
+0 0 * * * /usr/bin/python3 /path/to/your/folder/update_feed.py
+
+Save and exit. The system will now update your database every night at midnight.
+
+For Windows Users (Using Task Scheduler):
+
+Press the Windows key, type Task Scheduler, and open it.
+
+Click Create Basic Task... on the right panel. Name it "Update SOC Threat Feed" and click Next.
+
+Set the Trigger to Daily and set the time to midnight.
+
+Set the Action to Start a program.
+
+In "Program/script", type python. In "Add arguments", type the absolute path to your update_feed.py file. Click Finish.
+
+Start the Pipeline:
+
+python3 smart_pipeline.py
+
+
+📝 Usage
+
+Once smart_pipeline.py is running, it will monitor the target log file (e.g., mock_auth.log). As external systems (firewalls, SIEMs, Linux auth systems) write to this log, the pipeline will group the data, analyze the behavior, and if malicious intent is found, output a structured ticket to smart_soc_report.txt.

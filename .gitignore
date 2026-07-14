@@ -1,0 +1,19 @@
+Databases
+
+*.db
+*.sqlite3
+
+Log files
+
+*.log
+*.log.save
+
+Generated Reports
+
+incident_report.txt
+smart_soc_report.txt
+
+Python cache
+
+pycache/
+*.pyc
