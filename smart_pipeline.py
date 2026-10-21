@@ -29,6 +29,39 @@ def group_logs_by_ip(new_log_lines):
                 ip_blocks[ip].append(line)
     return ip_blocks
 
+class LogFileTail:
+    """Read appended log lines while handling rotations, truncation, and partial writes."""
+    def __init__(self, path):
+        self.path = path
+        self.identity = None
+        self.position = 0
+        self.pending = b""
+
+    def read_new_lines(self):
+        try:
+            with open(self.path, "rb") as log_file:
+                stat = os.fstat(log_file.fileno())
+                identity = (stat.st_dev, stat.st_ino)
+                completed = []
+                if self.identity != identity or stat.st_size < self.position:
+                    if self.pending:
+                        completed.append(self.pending)
+                    self.position = 0
+                    self.pending = b""
+                    self.identity = identity
+
+                log_file.seek(self.position)
+                chunk = log_file.read()
+                self.position = log_file.tell()
+        except FileNotFoundError:
+            return []
+
+        lines = self.pending + chunk
+        parts = lines.split(b"\n")
+        self.pending = parts.pop()
+        completed.extend(parts)
+        return [line.rstrip(b"\r").decode("utf-8", errors="replace") for line in completed]
+
 # --- 2. ENRICHMENT MODULE ---
 def get_threat_intel(ip_address):
     try:
@@ -138,15 +171,11 @@ if __name__ == "__main__":
     print(f"Initializing continuous monitoring on {log_file}...")
     print("Press Ctrl+C to stop the script.\n")
     
-    # Track the last byte read so we don't process old logs twice
-    last_position = 0 
+    log_tail = LogFileTail(log_file)
     
     try:
         while True:
-            with open(log_file, 'r') as file:
-                file.seek(last_position)
-                new_lines = file.readlines()
-                last_position = file.tell()
+            new_lines = log_tail.read_new_lines()
 
             if new_lines:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Detected {len(new_lines)} new events.")

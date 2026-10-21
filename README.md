@@ -8,7 +8,7 @@ By utilizing local Large Language Models (via Ollama) and custom Python orchestr
 
 Autonomous Behavioral Analysis: Replaces rigid Regex rules with AI context-awareness. The AI reads event sequences to detect novel and obfuscated attacks.
 
-Continuous Monitoring: Runs in a live loop, analyzing new log entries as they are written to the file.
+Continuous Monitoring: Runs in a live loop, analyzing new log entries as they are written to the file, including after rotation or truncation.
 
 Threat Intelligence Enrichment: Automatically queries a local SQLite database of known malicious IPs (populated by the CINS Army threat feed).
 
@@ -84,6 +84,8 @@ python3 smart_pipeline.py
 Once smart_pipeline.py is running, it will monitor the target log file (e.g., mock_auth.log). As external systems (firewalls, SIEMs, Linux auth systems) write to this log, the pipeline will group the data, analyze the behavior, and if malicious intent is found, output a structured ticket to smart_soc_report.txt.
 
 The Ollama response must match the incident report contract: a boolean `is_threat`, a supported `severity`, and the report fields for title, ATT&CK tactic, summary, indicators, analysis, and recommendation. Invalid JSON or fields are rejected instead of producing incomplete tickets. Requests to the local Ollama API time out after 60 seconds.
+
+The log monitor tracks file identity and byte position, so it resumes at the start of a rotated or truncated file and holds incomplete lines until the next newline arrives.
 
 Run the automated tests with:
 

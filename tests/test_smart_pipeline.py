@@ -22,6 +22,53 @@ VALID_DECISION = {
 
 
 class SmartPipelineTests(unittest.TestCase):
+    def test_log_tail_reads_only_new_complete_lines(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "auth.log")
+            with open(path, "wb") as log_file:
+                log_file.write(b"first event\n")
+            tail = smart_pipeline.LogFileTail(path)
+            self.assertEqual(tail.read_new_lines(), ["first event"])
+            self.assertEqual(tail.read_new_lines(), [])
+            with open(path, "ab") as log_file:
+                log_file.write(b"second event\n")
+            self.assertEqual(tail.read_new_lines(), ["second event"])
+
+    def test_log_tail_reassembles_a_line_split_across_reads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "auth.log")
+            with open(path, "wb") as log_file:
+                log_file.write(b"partial")
+            tail = smart_pipeline.LogFileTail(path)
+            self.assertEqual(tail.read_new_lines(), [])
+            with open(path, "ab") as log_file:
+                log_file.write(b" line\n")
+            self.assertEqual(tail.read_new_lines(), ["partial line"])
+
+    def test_log_tail_resets_after_file_rotation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "auth.log")
+            rotated_path = os.path.join(temp_dir, "auth.log.1")
+            with open(path, "wb") as log_file:
+                log_file.write(b"old event\n")
+            tail = smart_pipeline.LogFileTail(path)
+            self.assertEqual(tail.read_new_lines(), ["old event"])
+            os.replace(path, rotated_path)
+            with open(path, "wb") as log_file:
+                log_file.write(b"new\n")
+            self.assertEqual(tail.read_new_lines(), ["new"])
+
+    def test_log_tail_resets_after_truncation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "auth.log")
+            with open(path, "wb") as log_file:
+                log_file.write(b"a long previous event\n")
+            tail = smart_pipeline.LogFileTail(path)
+            self.assertEqual(tail.read_new_lines(), ["a long previous event"])
+            with open(path, "wb") as log_file:
+                log_file.write(b"new\n")
+            self.assertEqual(tail.read_new_lines(), ["new"])
+
     def test_analyze_uses_timeout_and_returns_report_compatible_decision(self):
         response = Mock()
         response.json.return_value = {"response": json.dumps(VALID_DECISION)}
