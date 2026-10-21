@@ -8,6 +8,11 @@ import time
 import uuid
 from datetime import datetime
 
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "qwen2.5"
+OLLAMA_TIMEOUT_SECONDS = 60
+VALID_SEVERITIES = {"Info", "Low", "Medium", "High", "Critical"}
+
 # --- 1. DATA ORGANIZATION MODULE ---
 def group_logs_by_ip(new_log_lines):
     # This now accepts a list of lines directly from the continuous loop
@@ -48,25 +53,79 @@ def analyze_behavior_with_ai(ip, logs, intel_context):
     {log_text}
     
     Determine if this IP's behavior is benign (normal) or malicious (an attack). 
-    Output EXACTLY in JSON format. Do not add conversational text.
+    Output exactly one JSON object, with no markdown or conversational text, using this schema:
     {{
-        "is_threat": true/false,
-        "threat_level": "None, Low, Medium, High, or Critical",
-        "attack_type": "Brief classification or 'Normal Activity'",
-        "ai_reasoning": "Explain your behavioral analysis of the event sequence.",
-        "recommended_action": "Playbook action (e.g., Block IP, Ignore)"
+        "is_threat": true,
+        "severity": "Info, Low, Medium, High, or Critical",
+        "incident_title": "Short incident title",
+        "mitre_tactic": "MITRE ATT&CK tactic or Unclassified",
+        "executive_summary": "Short summary for the incident report",
+        "indicators_of_compromise": ["indicator string"],
+        "root_cause_analysis": "Evidence-based behavior analysis",
+        "containment_recommendation": "Recommended action for analyst review"
     }}
+    Use a boolean for is_threat, a JSON array of strings for indicators_of_compromise, and strings for every other field.
     """
     
-    url = "http://localhost:11434/api/generate"
-    payload = {"model": "qwen2.5", "prompt": prompt, "stream": False, "format": "json"}
+    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "format": "json"}
     
     try:
-        response = requests.post(url, json=payload)
-        return json.loads(response.json()["response"])
-    except Exception as e:
+        response = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        model_output = response.json().get("response")
+        if not isinstance(model_output, str):
+            raise ValueError("Ollama response is missing its JSON text")
+        decision = json.loads(model_output)
+        if not validate_ai_decision(decision):
+            raise ValueError("Ollama output does not match the incident decision schema")
+        return decision
+    except (requests.RequestException, ValueError, AttributeError) as e:
         print(f"AI Error for IP {ip}: {e}")
         return None
+
+def validate_ai_decision(decision):
+    """Return whether a parsed model response matches the incident report contract."""
+    if not isinstance(decision, dict):
+        return False
+    if not isinstance(decision.get("is_threat"), bool):
+        return False
+    severity = decision.get("severity")
+    if not isinstance(severity, str) or severity not in VALID_SEVERITIES:
+        return False
+    text_fields = (
+        "incident_title",
+        "mitre_tactic",
+        "executive_summary",
+        "root_cause_analysis",
+        "containment_recommendation",
+    )
+    if any(not isinstance(decision.get(field), str) for field in text_fields):
+        return False
+    indicators = decision.get("indicators_of_compromise")
+    return isinstance(indicators, list) and all(isinstance(item, str) for item in indicators)
+
+def write_incident_report(ai_decision, logs, report_path="smart_soc_report.txt"):
+    """Append a validated incident decision and its source log evidence to a report."""
+    with open(report_path, "a", encoding="utf-8") as report_file:
+        report_file.write("\n========================================================================\n")
+        report_file.write("                     SOC INCIDENT REPORT TICKET\n")
+        report_file.write("========================================================================\n")
+        report_file.write(f"Incident ID   : INC-{str(uuid.uuid4())[:8].upper()}\n")
+        report_file.write(f"Date/Time     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        report_file.write(f"Title         : {ai_decision['incident_title']}\n")
+        report_file.write(f"Severity      : {ai_decision['severity']}\n")
+        report_file.write(f"MITRE ATT&CK  : {ai_decision['mitre_tactic']}\n")
+        report_file.write("------------------------------------------------------------------------\n")
+        report_file.write(f"[EXECUTIVE SUMMARY]\n{ai_decision['executive_summary']}\n\n")
+        report_file.write("[INDICATORS OF COMPROMISE (IoCs)]\n")
+        for indicator in ai_decision["indicators_of_compromise"]:
+            report_file.write(f" - {indicator}\n")
+        report_file.write(f"\n[ROOT CAUSE & BEHAVIORAL ANALYSIS]\n{ai_decision['root_cause_analysis']}\n\n")
+        report_file.write(f"[RECOMMENDED CONTAINMENT ACTION]\n{ai_decision['containment_recommendation']}\n\n")
+        report_file.write("[RAW LOG EVIDENCE]\n")
+        for log in logs:
+            report_file.write(f"  {log}\n")
+        report_file.write("========================================================================\n")
 
 # --- 4. CONTINUOUS MONITORING EXECUTION ---
 if __name__ == "__main__":
@@ -101,27 +160,7 @@ if __name__ == "__main__":
                     # If a threat is found, append it to the report file
                     if ai_decision and ai_decision.get("is_threat") is True:
                         print(f"    [!] THREAT CONFIRMED: {ip}. Documenting to report.")
-                        
-                        with open("smart_soc_report.txt", "a") as report_file:
-                            report_file.write(f"\n========================================================================\n")
-                            report_file.write(f"                     SOC INCIDENT REPORT TICKET\n")
-                            report_file.write(f"========================================================================\n")
-                            report_file.write(f"Incident ID   : INC-{str(uuid.uuid4())[:8].upper()}\n")
-                            report_file.write(f"Date/Time     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                            report_file.write(f"Title         : {ai_decision.get('incident_title', 'Unknown Threat')}\n")
-                            report_file.write(f"Severity      : {ai_decision.get('severity', 'Unknown')}\n")
-                            report_file.write(f"MITRE ATT&CK  : {ai_decision.get('mitre_tactic', 'Unclassified')}\n")
-                            report_file.write(f"------------------------------------------------------------------------\n")
-                            report_file.write(f"[EXECUTIVE SUMMARY]\n{ai_decision.get('executive_summary', 'None')}\n\n")
-                            report_file.write(f"[INDICATORS OF COMPROMISE (IoCs)]\n")
-                            for ioc in ai_decision.get('indicators_of_compromise', []):
-                                report_file.write(f" - {ioc}\n")
-                            report_file.write(f"\n[ROOT CAUSE & BEHAVIORAL ANALYSIS]\n{ai_decision.get('root_cause_analysis', 'None')}\n\n")
-                            report_file.write(f"[RECOMMENDED CONTAINMENT ACTION]\n{ai_decision.get('containment_recommendation', 'None')}\n\n")
-                            report_file.write(f"[RAW LOG EVIDENCE]\n")
-                            for log in logs:
-                                report_file.write(f"  {log}\n")
-                            report_file.write(f"========================================================================\n")
+                        write_incident_report(ai_decision, logs)
             
             # Pause for 15 seconds before checking the file again
             time.sleep(15)

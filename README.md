@@ -32,13 +32,18 @@ Ollama: Installed and running locally.
 
 LLM Model: The script defaults to qwen2.5 via Ollama.
 
+Python dependency: `requests` (install from `requirements.txt`).
+
 ⚙️ Setup & Installation
 
 Clone the repository:
 
-git clone https://github.com/yourusername/autonomous-soc-pipeline.git
+git clone https://github.com/Rafiq-root/autonomous-soc-pipeline.git
 cd autonomous-soc-pipeline
 
+Install Python dependencies:
+
+python3 -m pip install -r requirements.txt
 
 Initialize the Threat Database:
 
@@ -77,3 +82,11 @@ python3 smart_pipeline.py
 📝 Usage
 
 Once smart_pipeline.py is running, it will monitor the target log file (e.g., mock_auth.log). As external systems (firewalls, SIEMs, Linux auth systems) write to this log, the pipeline will group the data, analyze the behavior, and if malicious intent is found, output a structured ticket to smart_soc_report.txt.
+
+The Ollama response must match the incident report contract: a boolean `is_threat`, a supported `severity`, and the report fields for title, ATT&CK tactic, summary, indicators, analysis, and recommendation. Invalid JSON or fields are rejected instead of producing incomplete tickets. Requests to the local Ollama API time out after 60 seconds.
+
+Run the automated tests with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
