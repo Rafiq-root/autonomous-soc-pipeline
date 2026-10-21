@@ -16,6 +16,12 @@ def ensure_schema(conn):
     columns = {row[1] for row in cursor.execute("PRAGMA table_info(bad_ips)")}
     if "last_seen" not in columns:
         cursor.execute("ALTER TABLE bad_ips ADD COLUMN last_seen TEXT")
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS reported_incidents (
+            fingerprint TEXT PRIMARY KEY,
+            last_seen TEXT NOT NULL
+        )
+    ''')
 
 def create_database(database_path="threat_intel.db"):
     # Connect to SQLite. This automatically creates the configured database file.

@@ -82,6 +82,17 @@ Start the Pipeline:
 
 python3 smart_pipeline.py
 
+Runtime settings can be overridden without editing source code. For example:
+
+```bash
+python3 smart_pipeline.py --log-file /var/log/auth.log --report-file ./incidents.txt \
+  --database ./threat_intel.db --model qwen2.5 --poll-interval 5
+```
+
+Available options include `--checkpoint-file`, `--ollama-url`, and `--ollama-timeout` as well as the paths and model shown above. Timeout and polling values must be greater than zero. Use `python3 smart_pipeline.py --help` to see all options.
+
+`filter.py` remains as a compatibility command and forwards to the maintained `smart_pipeline.py` implementation, including its command-line options. New integrations should use `smart_pipeline.py` directly.
+
 
 📝 Usage
 
@@ -89,7 +100,11 @@ Once smart_pipeline.py is running, it will monitor the target log file (e.g., mo
 
 The Ollama response must match the incident report contract: a boolean `is_threat`, a supported `severity`, and the report fields for title, ATT&CK tactic, summary, indicators, analysis, and recommendation. Invalid JSON or fields are rejected instead of producing incomplete tickets. Requests to the local Ollama API time out after 60 seconds.
 
-The log monitor tracks file identity and byte position, so it resumes at the start of a rotated or truncated file and holds incomplete lines until the next newline arrives.
+The log monitor persists its file identity, byte position, and incomplete-line buffer in `mock_auth.log.state.json`. After a restart it resumes where it left off instead of replaying old entries. It also detects rotation and truncation, and holds incomplete lines until the next newline arrives. Keep the state file alongside the log; if it is removed or unreadable, monitoring safely starts from the beginning of the current log file.
+
+Threat reports are deduplicated in the local SQLite database by source IP and exact event batch. Repeated matches within 24 hours update the deduplication timestamp without creating another ticket; the same activity can be reported again after 24 hours. Old deduplication records are pruned after 30 days.
+
+Log evidence is passed to the model as a JSON string array and explicitly treated as untrusted data, so text inside an event cannot override analysis instructions. The model receives at most the newest 200 lines and 12,000 characters per IP, and reports use the same bounds with a truncation notice. Model containment recommendations remain advisory for a human analyst.
 
 Log grouping validates and canonicalizes IPv4 and IPv6 addresses before looking them up or sending their event groups to the model; malformed address-like strings are ignored.
 
