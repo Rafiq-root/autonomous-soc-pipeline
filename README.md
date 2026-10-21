@@ -22,7 +22,7 @@ smart_pipeline.py: The core engine. Monitors logs continuously, groups events by
 
 setup_db.py: Initializes the local SQLite threat intelligence database (threat_intel.db).
 
-update_feed.py: Reaches out to open-source threat feeds (CINS) to download active malicious IPs and updates the local database. Designed to be run via a background scheduler for daily updates.
+update_feed.py: Fetches the CINS threat feed over HTTPS, validates and deduplicates IP indicators, and updates the local database. Designed to be run via a background scheduler for daily updates.
 
 🛠️ Prerequisites
 
@@ -52,6 +52,8 @@ python3 setup_db.py
 
 Automate Daily Threat Intel Updates:
 Threat indicators decay quickly. It is highly recommended to automate the update_feed.py script to run daily at midnight.
+
+The updater skips comments, malformed entries, and duplicate addresses. A failed, empty, or entirely invalid feed does not change the database.
 
 For Linux/macOS Users (Using cron):
 
