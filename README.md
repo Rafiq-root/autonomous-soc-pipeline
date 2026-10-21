@@ -1,115 +1,118 @@
-Autonomous AI SOC Analyst Pipeline
+# Autonomous AI SOC Analyst Pipeline
 
-An automated, local AI-driven Security Operations Center (SOC) pipeline that emulates the triage, analysis, and reporting duties of a Tier 1 SOC Analyst.
+A local Python pipeline for monitoring authentication logs, grouping events by source IP, enriching them with threat intelligence, asking a locally hosted Ollama model to assess suspicious activity, and writing incident reports for analyst review.
 
-By utilizing local Large Language Models (via Ollama) and custom Python orchestration, this tool performs continuous behavioral analysis on network/auth logs without sending sensitive telemetry to cloud providers.
+By default, AI requests go to Ollama on `localhost`. The threat-feed updater separately downloads the CINS Army IP feed over HTTPS. If you configure a remote Ollama URL, log evidence will be sent to that endpoint.
 
-🚀 Features
+## Features
 
-Autonomous Behavioral Analysis: Replaces rigid Regex rules with AI context-awareness. The AI reads event sequences to detect novel and obfuscated attacks.
+- **Continuous log monitoring:** follows appended log entries and detects file rotation and truncation.
+- **Restart recovery:** saves the log cursor and partial-line buffer so a restart can resume. An in-flight batch is replayed until processing completes.
+- **IP validation:** groups events by canonical IPv4 or IPv6 address and ignores malformed address-like tokens.
+- **Threat intelligence:** looks up indicators in a local SQLite database and excludes stale CINS feed entries from AI context.
+- **AI-assisted triage:** validates Ollama's JSON response against the incident report schema and applies a request timeout.
+- **Incident reports:** writes report tickets with a title, severity, ATT&CK tactic, summary, indicators, analysis, recommendation, and bounded log evidence.
+- **Report deduplication:** suppresses the same source IP and exact event batch for 24 hours after a report is written.
+- **GitHub Actions:** runs Python compilation and the unit test suite on pushes and pull requests.
 
-Continuous Monitoring: Runs in a live loop, analyzing new log entries as they are written to the file, including after rotation or truncation.
+## Requirements
 
-Threat Intelligence Enrichment: Automatically queries a local SQLite database of known malicious IPs (populated by the CINS Army threat feed).
+- Python 3.9 or newer
+- Ollama installed and running locally, unless you configure another compatible Ollama endpoint
+- The `qwen2.5` model, or another model selected with `--model`
 
-Automated SOC Reporting: Generates industry-standard Incident Response tickets, including Executive Summaries, MITRE ATT&CK mapping, IoC extraction, and containment recommendations.
-
-100% Local & Private: All data processing and AI inference happen on-premise.
-
-📁 Project Structure
-
-smart_pipeline.py: The core engine. Monitors logs continuously, groups events by valid IPv4 or IPv6 address, queries the database, and feeds data to the AI for analysis.
-
-setup_db.py: Initializes the local SQLite threat intelligence database (threat_intel.db).
-
-update_feed.py: Fetches the CINS threat feed over HTTPS, validates and deduplicates IP indicators, and updates the local database. Designed to be run via a background scheduler for daily updates.
-
-🛠️ Prerequisites
-
-Python 3.x
-
-Ollama: Installed and running locally.
-
-LLM Model: The script defaults to qwen2.5 via Ollama.
-
-Python dependency: `requests` (install from `requirements.txt`).
-
-⚙️ Setup & Installation
-
-Clone the repository:
-
-git clone https://github.com/Rafiq-root/autonomous-soc-pipeline.git
-cd autonomous-soc-pipeline
-
-Install Python dependencies:
-
-python3 -m pip install -r requirements.txt
-
-Initialize the Threat Database:
-
-python3 setup_db.py
-
-
-Automate Daily Threat Intel Updates:
-Threat indicators decay quickly. It is highly recommended to automate the update_feed.py script to run daily at midnight.
-
-The updater skips comments, malformed entries, and duplicate addresses. A failed, empty, or entirely invalid feed does not change the database.
-
-Each CINS indicator records when it was last present in the feed. Feed entries older than 30 days (including legacy entries without a timestamp) are excluded from AI threat context; manually seeded indicators are not expired by this rule. Run `update_feed.py` to refresh the CINS timestamps.
-
-For Linux/macOS Users (Using cron):
-
-Open your terminal and type crontab -e.
-
-Scroll to the bottom of the file and add this line (replace /path/to/your/folder with your actual absolute path):
-0 0 * * * /usr/bin/python3 /path/to/your/folder/update_feed.py
-
-Save and exit. The system will now update your database every night at midnight.
-
-For Windows Users (Using Task Scheduler):
-
-Press the Windows key, type Task Scheduler, and open it.
-
-Click Create Basic Task... on the right panel. Name it "Update SOC Threat Feed" and click Next.
-
-Set the Trigger to Daily and set the time to midnight.
-
-Set the Action to Start a program.
-
-In "Program/script", type python. In "Add arguments", type the absolute path to your update_feed.py file. Click Finish.
-
-Start the Pipeline:
-
-python3 smart_pipeline.py
-
-Runtime settings can be overridden without editing source code. For example:
+## Install
 
 ```bash
-python3 smart_pipeline.py --log-file /var/log/auth.log --report-file ./incidents.txt \
-  --database ./threat_intel.db --model qwen2.5 --poll-interval 5
+git clone https://github.com/Rafiq-root/autonomous-soc-pipeline.git
+cd autonomous-soc-pipeline
+python3 -m pip install -r requirements.txt
+python3 setup_db.py
 ```
 
-Available options include `--checkpoint-file`, `--ollama-url`, and `--ollama-timeout` as well as the paths and model shown above. Timeout and polling values must be greater than zero. Use `python3 smart_pipeline.py --help` to see all options.
+Make sure Ollama is running and the selected model is available. For the default model:
 
-`filter.py` remains as a compatibility command and forwards to the maintained `smart_pipeline.py` implementation, including its command-line options. New integrations should use `smart_pipeline.py` directly.
+```bash
+ollama pull qwen2.5
+```
 
+## Update threat intelligence
 
-📝 Usage
+Run the updater to download and refresh the CINS feed in `threat_intel.db`:
 
-Once smart_pipeline.py is running, it will monitor the target log file (e.g., mock_auth.log). As external systems (firewalls, SIEMs, Linux auth systems) write to this log, the pipeline will group the data, analyze the behavior, and if malicious intent is found, output a structured ticket to smart_soc_report.txt.
+```bash
+python3 update_feed.py
+```
 
-The Ollama response must match the incident report contract: a boolean `is_threat`, a supported `severity`, and the report fields for title, ATT&CK tactic, summary, indicators, analysis, and recommendation. Invalid JSON or fields are rejected instead of producing incomplete tickets. Requests to the local Ollama API time out after 60 seconds.
+The updater uses HTTPS, validates and deduplicates IP addresses, and leaves the database unchanged if the request fails or the feed contains no valid addresses. Feed indicators record when they were last present; entries older than 30 days are excluded from AI context. Manually added indicators are not expired by this rule.
 
-The log monitor persists its file identity, byte position, and incomplete-line buffer in `mock_auth.log.state.json`. It saves a completed batch's cursor only after all event groups have been handled, so a restart replays an in-flight batch instead of silently skipping it. It also detects rotation and truncation, and holds incomplete lines until the next newline arrives. Keep the state file alongside the log; if it is removed or unreadable, monitoring safely starts from the beginning of the current log file.
+To refresh the feed daily on Linux or macOS, add a cron entry and replace the paths with the locations on your system:
 
-Threat reports are deduplicated in the local SQLite database by source IP and exact event batch. Repeated matches within 24 hours do not create another ticket; the same activity can be reported again 24 hours after its most recent report. Deduplication is recorded only after the report is written, so an interrupted batch is replayed rather than silently marked complete. Old deduplication records are pruned after 30 days.
+```cron
+0 0 * * * /usr/bin/python3 /path/to/autonomous-soc-pipeline/update_feed.py
+```
 
-Log evidence is passed to the model as a JSON string array with explicit instructions to treat it as untrusted data. This reduces prompt-injection risk but cannot guarantee that a model will ignore malicious text in an event. The model receives at most the newest 200 lines and 12,000 characters per IP, and reports use the same bounds with a truncation notice. Model containment recommendations remain advisory for a human analyst.
+On Windows, schedule `update_feed.py` to run daily using Task Scheduler.
 
-Log grouping validates and canonicalizes IPv4 and IPv6 addresses before looking them up or sending their event groups to the model; malformed address-like strings are ignored.
+## Run the monitor
 
-Run the automated tests with:
+The default log path is `mock_auth.log`. Create it or provide a path to a log file your account can read:
+
+```bash
+touch mock_auth.log
+python3 smart_pipeline.py
+```
+
+To use a different log and report path:
+
+```bash
+python3 smart_pipeline.py \
+  --log-file /path/to/auth.log \
+  --report-file ./incidents.txt \
+  --database ./threat_intel.db \
+  --model qwen2.5 \
+  --poll-interval 5
+```
+
+The monitor groups each new batch by valid IP address, queries the local threat database, and asks Ollama to classify the event groups. It writes a ticket when the model identifies a threat. Recommendations in the report are for analyst review; the pipeline does not carry out containment actions.
+
+Stop the monitor with `Ctrl+C`.
+
+## Command-line options
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--log-file` | `mock_auth.log` | Log file to monitor |
+| `--checkpoint-file` | `<log-file>.state.json` | Persistent tailer state |
+| `--report-file` | `smart_soc_report.txt` | Append-only incident report |
+| `--database` | `threat_intel.db` | Threat intelligence and deduplication database |
+| `--ollama-url` | `http://localhost:11434/api/generate` | Ollama generate API endpoint |
+| `--model` | `qwen2.5` | Ollama model name |
+| `--ollama-timeout` | `60` seconds | Maximum time for an Ollama request |
+| `--poll-interval` | `15` seconds | Delay between log checks |
+
+Timeout and polling values must be greater than zero. Show all options with:
+
+```bash
+python3 smart_pipeline.py --help
+```
+
+`filter.py` is retained as a compatibility command and forwards to `smart_pipeline.py`. New usage should call `smart_pipeline.py` directly.
+
+## Processing details
+
+- The monitor stores its cursor, file identity, and incomplete-line buffer in the checkpoint file. It advances the saved cursor after the full batch is handled. If the checkpoint is missing or unreadable, it starts from the beginning of the current log file.
+- The monitor detects file replacement and truncation, and waits for a newline before processing an incomplete line.
+- Incident fingerprints use the source IP and exact event batch. Matching reports are suppressed for 24 hours after the last report; old fingerprints are pruned after 30 days.
+- The model receives at most the newest 200 log lines and 12,000 characters per IP. Reports use the same evidence limits and include a truncation notice when needed.
+- Log entries are sent to the model as untrusted evidence with instructions not to follow commands inside them. This reduces prompt-injection risk but cannot guarantee model behavior.
+- The Ollama response must contain a boolean `is_threat`, a supported severity, and the report fields. Invalid JSON or fields are rejected.
+
+## Tests
+
+Install dependencies, then run:
 
 ```bash
 python3 -m unittest discover -s tests -v
+python3 -m py_compile smart_pipeline.py setup_db.py update_feed.py filter.py
 ```
