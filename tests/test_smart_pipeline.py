@@ -22,6 +22,17 @@ VALID_DECISION = {
 
 
 class SmartPipelineTests(unittest.TestCase):
+    def test_log_grouping_canonicalizes_valid_ips_and_rejects_malformed_tokens(self):
+        lines = [
+            "Failed password from 192.0.2.7 and 2001:0db8::1",
+            "Repeated request from 192.0.2.7",
+            "Invalid source 999.999.999.999",
+        ]
+        grouped = smart_pipeline.group_logs_by_ip(lines)
+        self.assertEqual(set(grouped), {"192.0.2.7", "2001:db8::1"})
+        self.assertEqual(grouped["192.0.2.7"], lines[:2])
+        self.assertEqual(grouped["2001:db8::1"], lines[:1])
+
     def test_log_tail_reads_only_new_complete_lines(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, "auth.log")

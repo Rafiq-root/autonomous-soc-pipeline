@@ -18,7 +18,7 @@ Automated SOC Reporting: Generates industry-standard Incident Response tickets, 
 
 📁 Project Structure
 
-smart_pipeline.py: The core engine. Monitors logs continuously, groups events by IP, queries the database, and feeds data to the AI for analysis.
+smart_pipeline.py: The core engine. Monitors logs continuously, groups events by valid IPv4 or IPv6 address, queries the database, and feeds data to the AI for analysis.
 
 setup_db.py: Initializes the local SQLite threat intelligence database (threat_intel.db).
 
@@ -88,6 +88,8 @@ Once smart_pipeline.py is running, it will monitor the target log file (e.g., mo
 The Ollama response must match the incident report contract: a boolean `is_threat`, a supported `severity`, and the report fields for title, ATT&CK tactic, summary, indicators, analysis, and recommendation. Invalid JSON or fields are rejected instead of producing incomplete tickets. Requests to the local Ollama API time out after 60 seconds.
 
 The log monitor tracks file identity and byte position, so it resumes at the start of a rotated or truncated file and holds incomplete lines until the next newline arrives.
+
+Log grouping validates and canonicalizes IPv4 and IPv6 addresses before looking them up or sending their event groups to the model; malformed address-like strings are ignored.
 
 Run the automated tests with:
 

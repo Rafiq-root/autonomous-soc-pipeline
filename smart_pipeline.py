@@ -1,6 +1,7 @@
 import re
 import requests
 import json
+import ipaddress
 import sqlite3
 import sys
 import os
@@ -15,18 +16,26 @@ VALID_SEVERITIES = {"Info", "Low", "Medium", "High", "Critical"}
 
 # --- 1. DATA ORGANIZATION MODULE ---
 def group_logs_by_ip(new_log_lines):
-    # This now accepts a list of lines directly from the continuous loop
-    ip_pattern = re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
+    # Extract IPv4 and IPv6 candidates, then let ipaddress reject malformed tokens.
+    ip_patterns = (
+        re.compile(r'(?<![0-9A-Za-z:.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])'),
+        re.compile(r'(?<![0-9A-Za-z:.])[0-9A-Fa-f:.]{3,}(?![0-9A-Za-z:.])'),
+    )
     ip_blocks = {}
 
     for line in new_log_lines:
         line = line.strip()
-        ips_found = ip_pattern.findall(line)
-        if ips_found:
-            for ip in set(ips_found):
-                if ip not in ip_blocks:
-                    ip_blocks[ip] = []
-                ip_blocks[ip].append(line)
+        ips_found = set()
+        for pattern in ip_patterns:
+            for candidate in pattern.findall(line):
+                try:
+                    ips_found.add(str(ipaddress.ip_address(candidate)))
+                except ValueError:
+                    continue
+        for ip in ips_found:
+            if ip not in ip_blocks:
+                ip_blocks[ip] = []
+            ip_blocks[ip].append(line)
     return ip_blocks
 
 class LogFileTail:
