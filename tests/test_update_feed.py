@@ -2,6 +2,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 import requests
@@ -49,6 +50,32 @@ class ThreatFeedTests(unittest.TestCase):
                 ("2001:db8::1", "Known Malicious Source - CINS Feed"),
             ],
         )
+
+    def test_update_migrates_legacy_table_and_refreshes_last_seen(self):
+        response = Mock()
+        response.text = "192.0.2.1\n"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "threat_intel.db")
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "CREATE TABLE bad_ips (ip_address TEXT PRIMARY KEY, threat_type TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO bad_ips VALUES (?, ?)",
+                    ("192.0.2.1", "Known Malicious Source - CINS Feed"),
+                )
+            with patch.object(update_feed.requests, "get", return_value=response):
+                added = update_feed.update_threat_database(db_path=db_path)
+            with sqlite3.connect(db_path) as connection:
+                threat_type, last_seen = connection.execute(
+                    "SELECT threat_type, last_seen FROM bad_ips WHERE ip_address = ?",
+                    ("192.0.2.1",),
+                ).fetchone()
+
+        self.assertEqual(added, 0)
+        self.assertEqual(threat_type, "Known Malicious Source - CINS Feed")
+        observed_at = datetime.fromisoformat(last_seen)
+        self.assertEqual(observed_at.tzinfo, timezone.utc)
 
     def test_invalid_or_empty_feed_does_not_change_database(self):
         response = Mock()

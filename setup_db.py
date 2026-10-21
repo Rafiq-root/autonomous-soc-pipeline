@@ -1,8 +1,7 @@
 import sqlite3
 
-def create_database():
-    # Connect to SQLite. This automatically creates a file named 'threat_intel.db'
-    conn = sqlite3.connect('threat_intel.db')
+def ensure_schema(conn):
+    """Create or upgrade the threat table without discarding existing indicators."""
     cursor = conn.cursor()
 
     # Create a table to hold IP addresses and their threat type
@@ -10,19 +9,25 @@ def create_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS bad_ips (
             ip_address TEXT PRIMARY KEY,
-            threat_type TEXT
+            threat_type TEXT,
+            last_seen TEXT
         )
     ''')
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(bad_ips)")}
+    if "last_seen" not in columns:
+        cursor.execute("ALTER TABLE bad_ips ADD COLUMN last_seen TEXT")
 
-    # Insert a known malicious IP. This IP matches the attacker in our mock logs.
-    cursor.execute('''
-        INSERT OR IGNORE INTO bad_ips (ip_address, threat_type)
-        VALUES ('203.0.113.45', 'Known Brute Force Source')
-    ''')
+def create_database(database_path="threat_intel.db"):
+    # Connect to SQLite. This automatically creates the configured database file.
+    with sqlite3.connect(database_path) as conn:
+        ensure_schema(conn)
 
-    # Save the changes and close the connection
-    conn.commit()
-    conn.close()
+        # Insert a documentation-only sample indicator for the mock logs.
+        conn.execute('''
+            INSERT OR IGNORE INTO bad_ips (ip_address, threat_type)
+            VALUES ('203.0.113.45', 'Known Brute Force Source')
+        ''')
+
     print("Local threat intelligence database 'threat_intel.db' created successfully.")
 
 if __name__ == "__main__":

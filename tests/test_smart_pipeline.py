@@ -1,7 +1,9 @@
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import requests
@@ -142,6 +144,47 @@ class SmartPipelineTests(unittest.TestCase):
         self.assertFalse(smart_pipeline.validate_ai_decision({**VALID_DECISION, "severity": ["High"]}))
         self.assertFalse(smart_pipeline.validate_ai_decision({**VALID_DECISION, "indicators_of_compromise": [42]}))
         self.assertFalse(smart_pipeline.validate_ai_decision([VALID_DECISION]))
+
+    def test_threat_intel_feed_entries_expire_but_manual_entries_remain(self):
+        now = datetime(2026, 10, 21, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "threat_intel.db")
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "CREATE TABLE bad_ips (ip_address TEXT PRIMARY KEY, threat_type TEXT)"
+                )
+                connection.executemany(
+                    "INSERT INTO bad_ips (ip_address, threat_type) VALUES (?, ?)",
+                    [
+                        ("192.0.2.1", smart_pipeline.CINS_FEED_THREAT_TYPE),
+                        ("192.0.2.2", smart_pipeline.CINS_FEED_THREAT_TYPE),
+                        ("192.0.2.3", "Manually added indicator"),
+                    ],
+                )
+                connection.execute(
+                    "ALTER TABLE bad_ips ADD COLUMN last_seen TEXT"
+                )
+                connection.execute(
+                    "UPDATE bad_ips SET last_seen = ? WHERE ip_address = ?",
+                    ((now - timedelta(days=2)).isoformat(), "192.0.2.1"),
+                )
+                connection.execute(
+                    "UPDATE bad_ips SET last_seen = ? WHERE ip_address = ?",
+                    ((now - timedelta(days=45)).isoformat(), "192.0.2.2"),
+                )
+
+            self.assertEqual(
+                smart_pipeline.get_threat_intel("192.0.2.1", db_path, now),
+                smart_pipeline.CINS_FEED_THREAT_TYPE,
+            )
+            self.assertIn(
+                "stale",
+                smart_pipeline.get_threat_intel("192.0.2.2", db_path, now),
+            )
+            self.assertEqual(
+                smart_pipeline.get_threat_intel("192.0.2.3", db_path, now),
+                "Manually added indicator",
+            )
 
 
 if __name__ == "__main__":

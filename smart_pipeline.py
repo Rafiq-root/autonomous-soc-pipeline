@@ -7,12 +7,15 @@ import sys
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from setup_db import ensure_schema
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5"
 OLLAMA_TIMEOUT_SECONDS = 60
 VALID_SEVERITIES = {"Info", "Low", "Medium", "High", "Critical"}
+CINS_FEED_THREAT_TYPE = "Known Malicious Source - CINS Feed"
+THREAT_INTEL_MAX_AGE_DAYS = 30
 
 # --- 1. DATA ORGANIZATION MODULE ---
 def group_logs_by_ip(new_log_lines):
@@ -72,14 +75,29 @@ class LogFileTail:
         return [line.rstrip(b"\r").decode("utf-8", errors="replace") for line in completed]
 
 # --- 2. ENRICHMENT MODULE ---
-def get_threat_intel(ip_address):
+def get_threat_intel(ip_address, database_path="threat_intel.db", now=None):
     try:
-        conn = sqlite3.connect('threat_intel.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT threat_type FROM bad_ips WHERE ip_address=?", (ip_address,))
-        result = cursor.fetchone()
-        conn.close()
-        return result[0] if result else "No known threat history."
+        with sqlite3.connect(database_path) as conn:
+            ensure_schema(conn)
+            result = conn.execute(
+                "SELECT threat_type, last_seen FROM bad_ips WHERE ip_address=?", (ip_address,)
+            ).fetchone()
+        if not result:
+            return "No known threat history."
+        threat_type, last_seen = result
+        if threat_type == CINS_FEED_THREAT_TYPE:
+            if not last_seen:
+                return "No current threat history (CINS indicator has no freshness timestamp)."
+            observed_at = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=timezone.utc)
+            current_time = now or datetime.now(timezone.utc)
+            if current_time.tzinfo is None:
+                current_time = current_time.replace(tzinfo=timezone.utc)
+            age = current_time - observed_at
+            if age > timedelta(days=THREAT_INTEL_MAX_AGE_DAYS) or age < -timedelta(minutes=5):
+                return "No current threat history (CINS indicator is stale)."
+        return threat_type
     except Exception:
         return "Database Error"
 

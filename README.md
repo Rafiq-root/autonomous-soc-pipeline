@@ -55,6 +55,8 @@ Threat indicators decay quickly. It is highly recommended to automate the update
 
 The updater skips comments, malformed entries, and duplicate addresses. A failed, empty, or entirely invalid feed does not change the database.
 
+Each CINS indicator records when it was last present in the feed. Feed entries older than 30 days (including legacy entries without a timestamp) are excluded from AI threat context; manually seeded indicators are not expired by this rule. Run `update_feed.py` to refresh the CINS timestamps.
+
 For Linux/macOS Users (Using cron):
 
 Open your terminal and type crontab -e.

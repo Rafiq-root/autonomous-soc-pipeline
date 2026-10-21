@@ -1,6 +1,9 @@
 import ipaddress
 import requests
 import sqlite3
+from datetime import datetime, timezone
+
+from setup_db import ensure_schema
 
 FEED_URL = "https://cinsscore.com/list/ci-badguys.txt"
 FEED_TIMEOUT_SECONDS = 10
@@ -43,13 +46,17 @@ def update_threat_database(db_path="threat_intel.db", feed_url=FEED_URL):
     try:
         added_count = 0
         with sqlite3.connect(db_path) as conn:
+            ensure_schema(conn)
             cursor = conn.cursor()
+            last_seen = datetime.now(timezone.utc).isoformat(timespec="seconds")
             for ip in malicious_ips:
                 cursor.execute(
-                    "INSERT OR IGNORE INTO bad_ips (ip_address, threat_type) VALUES (?, ?)",
-                    (ip, "Known Malicious Source - CINS Feed"),
+                    "INSERT OR IGNORE INTO bad_ips (ip_address, threat_type, last_seen) VALUES (?, ?, ?)",
+                    (ip, "Known Malicious Source - CINS Feed", last_seen),
                 )
                 added_count += cursor.rowcount
+                if cursor.rowcount == 0:
+                    cursor.execute("UPDATE bad_ips SET last_seen = ? WHERE ip_address = ?", (last_seen, ip))
         print(f"Database update complete. Added {added_count} new threats to local storage.")
         return added_count
         
