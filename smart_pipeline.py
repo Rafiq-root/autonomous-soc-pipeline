@@ -75,6 +75,7 @@ class LogFileTail:
         self.identity = None
         self.position = 0
         self.pending = b""
+        self._checkpoint_dirty = False
         self._load_checkpoint()
 
     def _load_checkpoint(self):
@@ -112,6 +113,8 @@ class LogFileTail:
                 checkpoint.flush()
                 os.fsync(checkpoint.fileno())
             os.replace(temp_path, self.checkpoint_path)
+            self._checkpoint_dirty = False
+            return True
         except OSError as error:
             print(f"Unable to save log checkpoint {self.checkpoint_path}: {error}")
             if temp_path:
@@ -119,6 +122,11 @@ class LogFileTail:
                     os.unlink(temp_path)
                 except OSError:
                     pass
+            return False
+
+    def acknowledge(self):
+        """Persist the cursor after the caller has processed the returned batch."""
+        return self._save_checkpoint()
 
     def read_new_lines(self):
         try:
@@ -146,7 +154,11 @@ class LogFileTail:
         parts = lines.split(b"\n")
         self.pending = parts.pop()
         completed.extend(parts)
-        self._save_checkpoint()
+        if completed:
+            self._checkpoint_dirty = True
+        elif not self._checkpoint_dirty:
+            # Persist partial bytes even though they are not ready for processing.
+            self._save_checkpoint()
         return [line.rstrip(b"\r").decode("utf-8", errors="replace") for line in completed]
 
 # --- 2. ENRICHMENT MODULE ---
@@ -275,20 +287,20 @@ def write_incident_report(ai_decision, logs, report_path="smart_soc_report.txt")
             report_file.write("  [Evidence truncated to the configured line/character limits.]\n")
         report_file.write("========================================================================\n")
 
-def should_report_incident(ip, logs, database_path="threat_intel.db", now=None):
-    """Record a threat event and suppress an identical report for 24 hours."""
+def _incident_fingerprint(ip, logs):
     event_key = json.dumps([ip, logs], ensure_ascii=False, separators=(",", ":"))
-    fingerprint = hashlib.sha256(event_key.encode("utf-8")).hexdigest()
+    return hashlib.sha256(event_key.encode("utf-8")).hexdigest()
+
+def should_report_incident(ip, logs, database_path="threat_intel.db", now=None):
+    """Check whether an identical report was successfully recorded in the last 24 hours."""
+    fingerprint = _incident_fingerprint(ip, logs)
     current_time = now or datetime.now(timezone.utc)
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
-    timestamp = current_time.isoformat(timespec="seconds")
 
     try:
         with sqlite3.connect(database_path) as conn:
             ensure_schema(conn)
-            cutoff = (current_time - INCIDENT_FINGERPRINT_RETENTION).isoformat(timespec="seconds")
-            conn.execute("DELETE FROM reported_incidents WHERE last_seen < ?", (cutoff,))
             previous = conn.execute(
                 "SELECT last_seen FROM reported_incidents WHERE fingerprint = ?", (fingerprint,)
             ).fetchone()
@@ -296,20 +308,33 @@ def should_report_incident(ip, logs, database_path="threat_intel.db", now=None):
                 previous_time = datetime.fromisoformat(previous[0].replace("Z", "+00:00"))
                 if previous_time.tzinfo is None:
                     previous_time = previous_time.replace(tzinfo=timezone.utc)
-                conn.execute(
-                    "UPDATE reported_incidents SET last_seen = ? WHERE fingerprint = ?",
-                    (timestamp, fingerprint),
-                )
                 return current_time - previous_time >= INCIDENT_DEDUPE_WINDOW
-            conn.execute(
-                "INSERT INTO reported_incidents (fingerprint, last_seen) VALUES (?, ?)",
-                (fingerprint, timestamp),
-            )
             return True
     except (sqlite3.Error, ValueError, OSError) as error:
         # Preserve reporting if deduplication storage is unavailable.
         print(f"Incident deduplication unavailable; reporting incident: {error}")
         return True
+
+def record_reported_incident(ip, logs, database_path="threat_intel.db", now=None):
+    """Persist a report fingerprint only after the incident report was written."""
+    fingerprint = _incident_fingerprint(ip, logs)
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    timestamp = current_time.isoformat(timespec="seconds")
+    try:
+        with sqlite3.connect(database_path) as conn:
+            ensure_schema(conn)
+            conn.execute(
+                "INSERT INTO reported_incidents (fingerprint, last_seen) VALUES (?, ?) "
+                "ON CONFLICT(fingerprint) DO UPDATE SET last_seen=excluded.last_seen",
+                (fingerprint, timestamp),
+            )
+            cutoff = (current_time - INCIDENT_FINGERPRINT_RETENTION).isoformat(timespec="seconds")
+            conn.execute("DELETE FROM reported_incidents WHERE last_seen < ?", (cutoff,))
+    except (sqlite3.Error, ValueError, OSError) as error:
+        # A failed dedupe write may allow a duplicate later, but must not undo the report.
+        print(f"Unable to record reported incident for deduplication: {error}")
 
 def positive_float(value):
     """argparse converter for timeout and polling values that must be positive."""
@@ -365,12 +390,16 @@ if __name__ == "__main__":
                     )
                     
                     # If a threat is found, append it to the report file
-                    if (ai_decision and ai_decision.get("is_threat") is True
-                            and should_report_incident(ip, logs, args.database)):
-                        print(f"    [!] THREAT CONFIRMED: {ip}. Documenting to report.")
-                        write_incident_report(ai_decision, logs, args.report_file)
-                    elif ai_decision and ai_decision.get("is_threat") is True:
-                        print(f"    [i] Duplicate incident for {ip}; report suppressed.")
+                    if ai_decision and ai_decision.get("is_threat") is True:
+                        if should_report_incident(ip, logs, args.database):
+                            print(f"    [!] THREAT CONFIRMED: {ip}. Documenting to report.")
+                            write_incident_report(ai_decision, logs, args.report_file)
+                            record_reported_incident(ip, logs, args.database)
+                        else:
+                            print(f"    [i] Duplicate incident for {ip}; report suppressed.")
+
+                # Advance the durable cursor only after all event groups are handled.
+                log_tail.acknowledge()
             
             # Pause for 15 seconds before checking the file again
             time.sleep(args.poll_interval)

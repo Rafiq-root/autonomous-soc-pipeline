@@ -104,6 +104,7 @@ class SmartPipelineTests(unittest.TestCase):
                 log_file.write(b"already processed\n")
             first_run = smart_pipeline.LogFileTail(path)
             self.assertEqual(first_run.read_new_lines(), ["already processed"])
+            self.assertTrue(first_run.acknowledge())
 
             restarted = smart_pipeline.LogFileTail(path)
             self.assertEqual(restarted.read_new_lines(), [])
@@ -155,6 +156,7 @@ class SmartPipelineTests(unittest.TestCase):
                 log_file.write(b"old event\n")
             tail = smart_pipeline.LogFileTail(path)
             self.assertEqual(tail.read_new_lines(), ["old event"])
+            self.assertTrue(tail.acknowledge())
             os.replace(path, rotated_path)
             with open(path, "wb") as log_file:
                 log_file.write(b"new\n")
@@ -168,12 +170,27 @@ class SmartPipelineTests(unittest.TestCase):
                 log_file.write(b"old event\n")
             first_run = smart_pipeline.LogFileTail(path)
             self.assertEqual(first_run.read_new_lines(), ["old event"])
+            self.assertTrue(first_run.acknowledge())
             os.replace(path, rotated_path)
             with open(path, "wb") as log_file:
                 log_file.write(b"new event\n")
 
             restarted = smart_pipeline.LogFileTail(path)
             self.assertEqual(restarted.read_new_lines(), ["new event"])
+
+    def test_log_tail_replays_unacknowledged_batch_after_restart(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "auth.log")
+            with open(path, "wb") as log_file:
+                log_file.write(b"event\n")
+            processing_run = smart_pipeline.LogFileTail(path)
+            self.assertEqual(processing_run.read_new_lines(), ["event"])
+
+            after_crash = smart_pipeline.LogFileTail(path)
+            self.assertEqual(after_crash.read_new_lines(), ["event"])
+            self.assertTrue(after_crash.acknowledge())
+            after_successful_processing = smart_pipeline.LogFileTail(path)
+            self.assertEqual(after_successful_processing.read_new_lines(), [])
 
     def test_log_tail_resets_after_truncation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -248,11 +265,12 @@ class SmartPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "threat_intel.db")
             self.assertTrue(smart_pipeline.should_report_incident("203.0.113.45", logs, db_path, now))
+            smart_pipeline.record_reported_incident("203.0.113.45", logs, db_path, now)
             self.assertFalse(smart_pipeline.should_report_incident(
                 "203.0.113.45", logs, db_path, now + timedelta(hours=1)
             ))
             self.assertTrue(smart_pipeline.should_report_incident(
-                "203.0.113.45", logs, db_path, now + timedelta(hours=25)
+                "203.0.113.45", logs, db_path, now + timedelta(hours=24)
             ))
 
     def test_incident_deduplication_distinguishes_ips_and_event_batches(self):
@@ -261,6 +279,7 @@ class SmartPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "threat_intel.db")
             self.assertTrue(smart_pipeline.should_report_incident("203.0.113.45", logs, db_path, now))
+            smart_pipeline.record_reported_incident("203.0.113.45", logs, db_path, now)
             self.assertTrue(smart_pipeline.should_report_incident("203.0.113.46", logs, db_path, now))
             self.assertTrue(smart_pipeline.should_report_incident(
                 "203.0.113.45", logs + ["Second failed password"], db_path, now
